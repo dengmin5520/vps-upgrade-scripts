@@ -2,6 +2,9 @@
 set -Eeuo pipefail
 
 SCRIPT_NAME="cpa_cli_vps_manager.sh"
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_SOURCE")" >/dev/null 2>&1 && pwd || pwd)"
+SCRIPT_REPO="${CPA_CLI_MANAGER_SCRIPT_REPO:-$SCRIPT_DIR}"
 CLI_CONTAINER="cli-proxy-api"
 KEEPER_CONTAINER="cpa-usage-keeper"
 DOCKER_NETWORK="cliproxyapi_default"
@@ -13,7 +16,6 @@ CLI_DIR="/home/docker/CLIProxyAPI"
 CLI_CONFIG="$CLI_DIR/config.yaml"
 KEEPER_DIR="/home/docker/cpa-usage-keeper"
 NGINX_CONF="/etc/nginx/conf.d/cpa-cli-proxy.conf"
-SCRIPT_REPO="/root/vps-upgrade-scripts"
 
 # Test hooks keep mock tests side-effect free.
 effective_euid(){ [[ -n "${CPA_CLI_MANAGER_TEST_EUID:-}" ]] && printf '%s' "$CPA_CLI_MANAGER_TEST_EUID" || printf '%s' "$EUID"; }
@@ -303,16 +305,28 @@ EOF
 }
 
 self_update_check(){
-  [[ -d "$SCRIPT_REPO/.git" ]] || { log "未检测到 $SCRIPT_REPO Git 仓库，跳过脚本自更新检查。"; return 0; }
-  git -C "$SCRIPT_REPO" fetch origin main || { log "无法检查 GitHub 脚本版本。本次升级已取消。"; return 1; }
-  local head remote; head="$(git -C "$SCRIPT_REPO" rev-parse HEAD)"; remote="$(git -C "$SCRIPT_REPO" rev-parse origin/main)"
+  [[ "${CPA_CLI_MANAGER_SKIP_SELF_UPDATE:-}" == "1" ]] && return 0
+  [[ -d "$SCRIPT_REPO/.git" ]] || { log "未检测到当前脚本所在目录的 Git 仓库：$SCRIPT_REPO，跳过脚本自更新检查。"; return 0; }
+  local branch head remote behind ahead
+  branch="$(git -C "$SCRIPT_REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  [[ -n "$branch" && "$branch" != "HEAD" ]] || branch="main"
+  git -C "$SCRIPT_REPO" fetch origin "$branch" || { log "无法检查 GitHub 脚本版本。本次操作已取消，避免用旧脚本继续写配置。"; return 1; }
+  head="$(git -C "$SCRIPT_REPO" rev-parse HEAD)"
+  remote="$(git -C "$SCRIPT_REPO" rev-parse "origin/$branch")"
   if [[ "$head" != "$remote" ]]; then
-    log "检测到管理脚本有新版本，正在先更新脚本自身..."
-    git -C "$SCRIPT_REPO" pull --ff-only
-    log "脚本已更新到 GitHub 最新版本。请重新运行本脚本后再继续升级容器。"
-    exit 0
+    behind="$(git -C "$SCRIPT_REPO" rev-list --count "HEAD..origin/$branch" 2>/dev/null || echo 0)"
+    ahead="$(git -C "$SCRIPT_REPO" rev-list --count "origin/$branch..HEAD" 2>/dev/null || echo 0)"
+    if [[ "${behind:-0}" -gt 0 && "${ahead:-0}" -eq 0 ]]; then
+      log "检测到管理脚本有新版本，正在先更新脚本自身..."
+      git -C "$SCRIPT_REPO" pull --ff-only origin "$branch" || { log "脚本自动更新失败。本次操作已取消，请手动执行：cd '$SCRIPT_REPO' && git pull --ff-only"; return 1; }
+      log "脚本已更新到 GitHub 最新版本。请重新运行本脚本后再继续。"
+      exit 0
+    fi
+    log "当前脚本仓库与 origin/$branch 不一致，且不是可安全快进的状态。"
+    log "本次操作已取消，请手动处理：cd '$SCRIPT_REPO' && git status && git pull --ff-only"
+    return 1
   fi
-  log "当前管理脚本已经是 GitHub 最新版本，继续执行容器升级。"
+  log "当前管理脚本已经是 GitHub 最新版本，继续执行。"
 }
 
 password_mode(){
@@ -564,4 +578,5 @@ EOF
 printf '请输入选项 [1-5]：'; local c; read -r c || c=5; case "$c" in 1) install_menu;; 2) upgrade_menu;; 3) uninstall_menu;; 4) public_access_menu;; 5) log "已退出。"; return 0;; *) log "无效选项，请重新输入。";; esac; done; }
 
 require_root
+self_update_check
 main_menu
