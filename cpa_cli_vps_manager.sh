@@ -306,27 +306,38 @@ EOF
 
 self_update_check(){
   [[ "${CPA_CLI_MANAGER_SKIP_SELF_UPDATE:-}" == "1" ]] && return 0
-  [[ -d "$SCRIPT_REPO/.git" ]] || { log "未检测到当前脚本所在目录的 Git 仓库：$SCRIPT_REPO，跳过脚本自更新检查。"; return 0; }
+  log "正在检查管理脚本是否有新版本..."
+  [[ -d "$SCRIPT_REPO/.git" ]] || { log "未检测到 Git 仓库，跳过脚本自更新检查。"; return 0; }
   local branch head remote behind ahead
   branch="$(git -C "$SCRIPT_REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   [[ -n "$branch" && "$branch" != "HEAD" ]] || branch="main"
-  git -C "$SCRIPT_REPO" fetch origin "$branch" || { log "无法检查 GitHub 脚本版本。本次操作已取消，避免用旧脚本继续写配置。"; return 1; }
-  head="$(git -C "$SCRIPT_REPO" rev-parse HEAD)"
-  remote="$(git -C "$SCRIPT_REPO" rev-parse "origin/$branch")"
+  if ! git -C "$SCRIPT_REPO" fetch origin "$branch" >/dev/null 2>&1; then
+    log "无法检查 GitHub 脚本版本（网络不通或权限问题），本次操作已取消，避免用旧脚本继续写配置。"
+    return 1
+  fi
+  head="$(git -C "$SCRIPT_REPO" rev-parse HEAD 2>/dev/null || true)"
+  remote="$(git -C "$SCRIPT_REPO" rev-parse "origin/$branch" 2>/dev/null || true)"
+  if [[ -z "$head" || -z "$remote" ]]; then
+    log "无法比较脚本版本，跳过自更新检查。"
+    return 0
+  fi
   if [[ "$head" != "$remote" ]]; then
     behind="$(git -C "$SCRIPT_REPO" rev-list --count "HEAD..origin/$branch" 2>/dev/null || echo 0)"
     ahead="$(git -C "$SCRIPT_REPO" rev-list --count "origin/$branch..HEAD" 2>/dev/null || echo 0)"
     if [[ "${behind:-0}" -gt 0 && "${ahead:-0}" -eq 0 ]]; then
-      log "检测到管理脚本有新版本，正在先更新脚本自身..."
-      git -C "$SCRIPT_REPO" pull --ff-only origin "$branch" || { log "脚本自动更新失败。本次操作已取消，请手动执行：cd '$SCRIPT_REPO' && git pull --ff-only"; return 1; }
-      log "脚本已更新到 GitHub 最新版本。请重新运行本脚本后再继续。"
-      exit 0
+      log "发现脚本新版本（落后 ${behind} 个提交），正在自动更新..."
+      if git -C "$SCRIPT_REPO" pull --ff-only origin "$branch" >/dev/null 2>&1; then
+        log "脚本已更新到最新版本。请重新运行：sudo bash $SCRIPT_NAME"
+        exit 0
+      else
+        log "脚本自动更新失败，请手动执行：cd '$SCRIPT_REPO' && git pull --ff-only"
+        return 1
+      fi
     fi
-    log "当前脚本仓库与 origin/$branch 不一致，且不是可安全快进的状态。"
-    log "本次操作已取消，请手动处理：cd '$SCRIPT_REPO' && git status && git pull --ff-only"
+    log "脚本仓库与 origin/$branch 不一致且无法安全快进，请手动处理：cd '$SCRIPT_REPO' && git status"
     return 1
   fi
-  log "当前管理脚本已经是 GitHub 最新版本，继续执行。"
+  log "管理脚本已是最新版本，继续执行。"
 }
 
 password_mode(){
