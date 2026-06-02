@@ -1,97 +1,313 @@
-# CPA + CLIProxyAPI Docker container upgrade runbook
+# CPA + CLIProxyAPI VPS Manager
 
-Use this when upgrading a VPS deployment that contains `cli-proxy-api` and `cpa-usage-keeper` containers.
+Interactive Bash manager for installing, upgrading, uninstalling, and exposing a VPS deployment that runs:
 
-## Upstream references checked
+- [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
+- [cpa-usage-keeper](https://github.com/Willxup/cpa-usage-keeper)
 
-- CLIProxyAPI official repo: `router-for-me/CLIProxyAPI`
-  - Official Compose image: `eceasy/cli-proxy-api:latest`
-  - Compose uses `pull_policy: always`.
-  - Official mounts: config file to `/CLIProxyAPI/config.yaml`, auth directory to `/root/.cli-proxy-api`, logs to `/CLIProxyAPI/logs`.
-  - Official ports include `8317`, `8085`, `1455`, `54545`, `51121`, `11451`.
-  - Management API is configured in `config.yaml` under `remote-management`; `secret-key` may be plaintext and is hashed on startup. Empty disables `/v0/management` routes.
-  - Keeper requires `usage-statistics-enabled: true` in CLIProxyAPI config.
-- CPA Usage Keeper official repo: `Willxup/cpa-usage-keeper`
-  - Official/recommended Docker image: `ghcr.io/willxup/cpa-usage-keeper:latest`.
-  - Recommended CPA+Keeper deployment is Docker Compose on the same Docker network.
-  - Keeper server should call CPA with `CPA_BASE_URL=http://cli-proxy-api:8317` when both containers share a network.
-  - Keeper Redis/RESP queue address should be `REDIS_QUEUE_ADDR=cli-proxy-api:8317` when using Docker DNS and the default CPA port.
-  - Public deployments should enable `AUTH_ENABLED=true` and set `LOGIN_PASSWORD`; terminate HTTPS at reverse proxy unless using Keeper built-in TLS.
+This repository currently provides:
 
-## Durable upgrade pattern
+- `cpa_cli_vps_manager.sh` — interactive VPS management script.
+- `upgrade_cpa_cli_containers_template.sh` — older dry-run-first container upgrade template.
+- `tests/test_manager_basic.py` — local mock tests for the manager script.
 
-1. Start with a dry-run. Do not recreate containers until current config is inspected and masked.
-2. Back up current `docker inspect` for both containers and the CLIProxyAPI config file.
-3. Preserve existing CLIProxyAPI mounts and port bindings rather than replacing them with generic defaults.
-4. Patch CLIProxyAPI config intentionally:
-   - `remote-management.allow-remote: true` when Keeper must call management API over Docker network.
-   - `remote-management.secret-key: <CPA_MANAGEMENT_KEY>` using the plaintext value provided for this deployment.
-   - `usage-statistics-enabled: true` for Keeper usage ingestion.
-5. Pull current images (`docker pull ...:latest`) before recreate. Do not assume `latest` changed; compare image IDs if deciding whether an upgrade is necessary.
-6. Recreate `cli-proxy-api` first, then recreate `cpa-usage-keeper`.
-7. Before recreation, query and preserve each container's existing Docker network set with `docker inspect ... .NetworkSettings.Networks`; after recreation, attach each container back to its own previous networks. Do **not** hard-code `cliproxyapi_default`, `hermes-net`, or any other network name in the upgrade template. If `cpa-usage-keeper` is missing/new, fall back to the CLI container's current network set so Docker DNS for `cli-proxy-api` still works.
-8. Configure Keeper with Docker-internal service names, not public URLs:
-   - `CPA_BASE_URL=http://cli-proxy-api:8317`
-   - `REDIS_QUEUE_ADDR=cli-proxy-api:8317`
-9. Keep credential semantics distinct:
-   - `CPA_MANAGEMENT_KEY` is for Keeper -> CLIProxyAPI management API and Redis/RESP queue authentication.
-   - `LOGIN_PASSWORD` is only Keeper Web UI login protection.
-   - SSH/VPS password is a third credential and must not be reused implicitly.
-10. Verify from inside Keeper:
-    - Docker DNS resolves `cli-proxy-api`.
-    - TCP/HTTP to `cli-proxy-api:8317` works.
-11. Verify from the host/reverse proxy:
-    - Keeper endpoint returns an HTTP status consistent with login protection (usually redirect/login/200/401/404 depending base path).
-    - Logs for both containers show no startup or auth errors.
+> This project is a helper wrapper. It is not an official CLIProxyAPI or cpa-usage-keeper project.
 
-## CLIProxyAPI environment variable pitfall
+---
 
-CLIProxyAPI's official `docker-compose.yml` only declares one environment variable: `DEPLOY`. The management secret-key is **exclusively** configured via `config.yaml` under `remote-management.secret-key`. There is no `MANAGEMENT_PASSWORD` env var — setting `-e MANAGEMENT_PASSWORD=...` on the CLI container is silently ignored.
+## Features
 
-When writing upgrade scripts:
-- **DO** patch `config.yaml` with `remote-management.secret-key` (this is the only way to set the management key).
-- **DO NOT** pass `-e MANAGEMENT_PASSWORD=...` to the CLI container — it gives a false sense of configuration and has no effect.
-- The CLI config patching must happen **before** container recreation since the new container reads config.yaml at startup.
+`cpa_cli_vps_manager.sh` provides a menu-driven workflow:
 
-## CPA Usage Keeper full env var reference
+```text
+1. Install
+2. Upgrade
+3. Uninstall
+4. Public access / reverse proxy
+5. Exit
+```
 
-Official `.env.example` at `Willxup/cpa-usage-keeper` documents all env vars. Key ones for upgrade scripts:
+### Install
 
-| Env var | Required | Default | Notes |
-|---|---|---|---|
-| `CPA_BASE_URL` | yes | — | `http://cli-proxy-api:8317` in Docker |
-| `CPA_MANAGEMENT_KEY` | yes | — | Keeper → CLI management auth |
-| `REDIS_QUEUE_ADDR` | no | auto from CPA_BASE_URL | Explicit `cli-proxy-api:8317` when non-default port |
-| `AUTH_ENABLED` | no | `false` | Set `true` for public deployments |
-| `LOGIN_PASSWORD` | no | — | Required when AUTH_ENABLED=true |
-| `AUTH_SESSION_TTL` | no | `168h` | |
-| `APP_PORT` | no | `8080` | |
-| `APP_BASE_PATH` | no | `/` | e.g. `/cpa` for subpath |
-| `WORK_DIR` | no | `./data` (`/data` in Docker) | |
-| `REQUEST_TIMEOUT` | no | `30s` | |
-| `TLS_SKIP_VERIFY` | no | `false` | |
-| `QUOTA_AUTO_REFRESH_ENABLED` | no | `false` | |
-| `LOG_LEVEL` | no | `info` | |
-| `LOG_FILE_ENABLED` | no | `true` | |
-| `BACKUP_ENABLED` | no | `true` | |
+- Install Docker using Docker's official convenience script: `https://get.docker.com`.
+- Install `cli-proxy-api` with config file, auth directory, logs directory, Docker network, and management key.
+- Install `cpa-usage-keeper` on the same Docker network.
+- Keeper binds to `127.0.0.1:8080` by default instead of exposing itself directly to the public Internet.
 
-## Script guidance
+### Upgrade
 
-A sanitized reusable template exists at `scripts/upgrade_cpa_cli_containers_template.sh`. Before running it on a VPS:
+Upgrade menu:
 
-1. Copy to the VPS as root, e.g. `/root/upgrade-cpa-cli-containers.sh`.
-2. Fill the placeholder secrets locally on the VPS; do not paste secrets into chat.
-3. `chmod 600 /root/upgrade-cpa-cli-containers.sh`.
-4. Run dry-run first: `sudo bash /root/upgrade-cpa-cli-containers.sh --dry-run`.
-5. Apply only after reviewing the dry-run: `sudo bash /root/upgrade-cpa-cli-containers.sh --apply -y`.
+```text
+1. Upgrade CLIProxyAPI
+2. Upgrade cpa-usage-keeper
+3. Upgrade both
+4. Back
+```
+
+Upgrade behavior:
+
+- Checks whether this manager repository has a newer GitHub version before container upgrades.
+- Supports keeping existing passwords or entering new passwords.
+- Pulls latest container images.
+- Recreates containers while preserving existing Docker networks, port bindings, volume mounts, and restart policy when possible.
+- Uses a temporary `--env-file` for cpa-usage-keeper secrets and removes it after `docker run`.
+
+### Uninstall
+
+Uninstall menu:
+
+```text
+1. Uninstall CLIProxyAPI
+2. Uninstall cpa-usage-keeper
+3. Back
+```
+
+Default uninstall only stops and removes the selected container. It does **not** remove data directories, images, Docker networks, firewall rules, or secrets.
+
+### Public access / reverse proxy
+
+Public access menu:
+
+```text
+1. Configure public access
+2. Allow IP + port access to CLIProxyAPI
+3. Deny IP + port access to CLIProxyAPI
+4. Back
+```
+
+Public access behavior:
+
+- Uses system Nginx.
+- Requires the user to enter a domain that has already been resolved to the VPS public IP.
+- Writes a fixed reverse proxy configuration:
+  - `https://<domain>/management.html` → CLIProxyAPI
+  - `https://<domain>/cpa/` → cpa-usage-keeper
+- Uses certbot automatically:
+
+```bash
+certbot --nginx \
+  -d <domain> \
+  --non-interactive \
+  --agree-tos \
+  --register-unsafely-without-email \
+  --no-redirect
+```
+
+- Does not require an email address.
+- Does not force HTTP → HTTPS redirects.
+- If certificate issuance fails, the HTTP Nginx configuration is kept.
+
+---
+
+## Quick start
+
+On the VPS:
+
+```bash
+git clone https://github.com/dengmin5520/vps-upgrade-scripts.git
+cd vps-upgrade-scripts
+bash -n cpa_cli_vps_manager.sh
+sudo bash cpa_cli_vps_manager.sh
+```
+
+If the repository is already cloned:
+
+```bash
+cd /root/vps-upgrade-scripts
+git pull
+bash -n cpa_cli_vps_manager.sh
+sudo bash cpa_cli_vps_manager.sh
+```
+
+---
 
 ## Safety notes
 
-- Do not print raw env files or `docker inspect` env output containing secrets. Redact `KEY`, `PASSWORD`, `TOKEN`, and `SECRET` values.
-- Prefer binding public-sensitive container ports to `127.0.0.1` unless an existing deployment intentionally exposes them through firewall/reverse proxy.
-- When multiple VPSs are involved, state the target IP/host before running commands and do not carry over previous VPS assumptions.
+- Run as root or via `sudo`.
+- Most destructive actions require a second confirmation and default to `N`.
+- Password input is hidden.
+- Raw secrets should not be printed in terminal output.
+- cpa-usage-keeper is not exposed directly by default; it is intended to be exposed through Nginx `/cpa/`.
+- Public port `8317/tcp` for CLIProxyAPI can be allowed or denied from the public access menu.
+- Always verify cloud provider security groups separately.
 
-## Related references
+---
 
-- `references/cpa-cli-container-upgrade-script-hardening.md` — script hardening lessons and the direct SSH upgrade pattern (bypass full script transfer when it's cumbersome).
-- `references/cpa-keeper-us-vps-topology-38.55.146.20.md` — US VPS container topology snapshot.
+## Local tests
+
+The tests use mock commands and do not install Docker or touch real Nginx/certbot:
+
+```bash
+bash -n cpa_cli_vps_manager.sh
+python3 -m unittest discover -s tests -v
+```
+
+---
+
+## Credits and upstream projects
+
+This helper depends on and is designed around these upstream projects:
+
+- CLIProxyAPI — https://github.com/router-for-me/CLIProxyAPI
+- cpa-usage-keeper — https://github.com/Willxup/cpa-usage-keeper
+
+Thanks to the maintainers and contributors of both projects.
+
+---
+
+# CPA + CLIProxyAPI VPS 管理脚本
+
+这是一个交互式 Bash 管理脚本，用于在 VPS 上安装、升级、卸载和配置公网访问：
+
+- [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
+- [cpa-usage-keeper](https://github.com/Willxup/cpa-usage-keeper)
+
+当前仓库包含：
+
+- `cpa_cli_vps_manager.sh` — 交互式 VPS 管理脚本。
+- `upgrade_cpa_cli_containers_template.sh` — 旧版 dry-run 优先的容器升级模板。
+- `tests/test_manager_basic.py` — 本地 mock 测试。
+
+> 本项目只是辅助封装脚本，不是 CLIProxyAPI 或 cpa-usage-keeper 官方项目。
+
+---
+
+## 功能
+
+`cpa_cli_vps_manager.sh` 提供菜单式流程：
+
+```text
+1. 安装
+2. 升级
+3. 卸载
+4. 公网访问 / 反向代理
+5. 退出
+```
+
+### 安装
+
+- 使用 Docker 官方安装脚本 `https://get.docker.com` 安装 Docker。
+- 安装 `cli-proxy-api`，包括配置文件、auth 目录、日志目录、Docker 网络和管理密钥。
+- 安装 `cpa-usage-keeper`，并让它和 CLIProxyAPI 位于同一个 Docker 网络。
+- Keeper 默认只绑定 `127.0.0.1:8080`，不直接裸露到公网。
+
+### 升级
+
+升级菜单：
+
+```text
+1. 升级 CLIProxyAPI
+2. 升级 cpa-usage-keeper
+3. 一同升级
+4. 返回
+```
+
+升级行为：
+
+- 升级容器前，先检查管理脚本仓库是否有 GitHub 新版本。
+- 支持“保存当前密码升级”和“更改密码后升级”。
+- 拉取最新容器镜像。
+- 重建容器时尽量保留原 Docker 网络、端口映射、volume 挂载和 restart policy。
+- cpa-usage-keeper 的敏感环境变量通过临时 `--env-file` 注入，并在 `docker run` 后删除。
+
+### 卸载
+
+卸载菜单：
+
+```text
+1. 卸载 CLIProxyAPI
+2. 卸载 cpa-usage-keeper
+3. 返回
+```
+
+默认卸载只停止并删除指定容器，不删除数据目录、镜像、Docker 网络、防火墙规则或密钥。
+
+### 公网访问 / 反向代理
+
+公网访问菜单：
+
+```text
+1. 配置公网访问
+2. 允许 IP + 端口访问 CLIProxyAPI
+3. 禁止 IP + 端口访问 CLIProxyAPI
+4. 返回
+```
+
+公网访问行为：
+
+- 固定使用系统 Nginx。
+- 要求用户输入已经解析到 VPS 公网 IP 的域名。
+- 写入固定反向代理配置：
+  - `https://<domain>/management.html` → CLIProxyAPI
+  - `https://<domain>/cpa/` → cpa-usage-keeper
+- 自动使用 certbot 申请证书：
+
+```bash
+certbot --nginx \
+  -d <domain> \
+  --non-interactive \
+  --agree-tos \
+  --register-unsafely-without-email \
+  --no-redirect
+```
+
+- 不要求用户输入邮箱。
+- 不强制 HTTP 跳转 HTTPS。
+- 如果证书申请失败，保留 HTTP Nginx 配置。
+
+---
+
+## 快速开始
+
+在 VPS 上：
+
+```bash
+git clone https://github.com/dengmin5520/vps-upgrade-scripts.git
+cd vps-upgrade-scripts
+bash -n cpa_cli_vps_manager.sh
+sudo bash cpa_cli_vps_manager.sh
+```
+
+如果仓库已经存在：
+
+```bash
+cd /root/vps-upgrade-scripts
+git pull
+bash -n cpa_cli_vps_manager.sh
+sudo bash cpa_cli_vps_manager.sh
+```
+
+---
+
+## 安全说明
+
+- 请使用 root 或 `sudo` 运行。
+- 大多数危险操作都有二次确认，并且默认 `N`。
+- 密码输入会隐藏。
+- 脚本不应在终端输出原始密钥。
+- cpa-usage-keeper 默认不直接暴露公网，推荐通过 Nginx `/cpa/` 访问。
+- CLIProxyAPI 的公网 `8317/tcp` 直连可在公网访问菜单中允许或禁止。
+- 云厂商安全组需要另外确认。
+
+---
+
+## 本地测试
+
+测试使用 mock 命令，不会安装 Docker，也不会修改真实 Nginx/certbot：
+
+```bash
+bash -n cpa_cli_vps_manager.sh
+python3 -m unittest discover -s tests -v
+```
+
+---
+
+## 致谢和上游项目
+
+本辅助脚本围绕以下上游项目设计：
+
+- CLIProxyAPI — https://github.com/router-for-me/CLIProxyAPI
+- cpa-usage-keeper — https://github.com/Willxup/cpa-usage-keeper
+
+感谢两个项目的维护者和贡献者。
