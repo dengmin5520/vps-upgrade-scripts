@@ -50,7 +50,7 @@ class SelfUpdateTests(unittest.TestCase):
                 timeout=20,
             )
             self.assertEqual(result.returncode, 0, result.stdout)
-            self.assertIn("脚本已更新到 GitHub 最新版本", result.stdout)
+            self.assertIn("脚本已更新到最新版本", result.stdout)
             self.assertTrue((clone / "marker.txt").exists(), result.stdout)
             head = subprocess.check_output(["git", "-C", str(clone), "rev-parse", "HEAD"], text=True).strip()
             remote = subprocess.check_output(["git", "-C", str(clone), "rev-parse", "origin/main"], text=True).strip()
