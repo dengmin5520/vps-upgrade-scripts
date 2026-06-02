@@ -111,14 +111,31 @@ bash -n cpa_cli_vps_manager.sh
 sudo bash cpa_cli_vps_manager.sh
 ```
 
-If the repository is already cloned:
+If `git clone` reports the directory already exists, use `git pull` instead:
 
 ```bash
-cd /root/vps-upgrade-scripts
+cd ~/vps-upgrade-scripts
 git pull
-bash -n cpa_cli_vps_manager.sh
 sudo bash cpa_cli_vps_manager.sh
 ```
+
+---
+
+## Updating the script
+
+### Automatic update on startup
+
+When you run `sudo bash cpa_cli_vps_manager.sh`, the script checks GitHub for a newer version **before** showing the menu. If an update is available, it runs `git pull` automatically, prints a message, and exits. Re-run the script to continue.
+
+### Manual update
+
+```bash
+cd ~/vps-upgrade-scripts
+git pull
+sudo bash cpa_cli_vps_manager.sh
+```
+
+If `git clone` says `fatal: destination path 'vps-upgrade-scripts' already exists and is not an empty directory`, that means you already cloned it before. Just `cd` into the directory and `git pull`.
 
 ---
 
@@ -269,14 +286,31 @@ bash -n cpa_cli_vps_manager.sh
 sudo bash cpa_cli_vps_manager.sh
 ```
 
-如果仓库已经存在：
+如果 `git clone` 提示目录已存在，用 `git pull` 代替：
 
 ```bash
-cd /root/vps-upgrade-scripts
+cd ~/vps-upgrade-scripts
 git pull
-bash -n cpa_cli_vps_manager.sh
 sudo bash cpa_cli_vps_manager.sh
 ```
+
+---
+
+## 更新脚本
+
+### 启动时自动更新
+
+运行 `sudo bash cpa_cli_vps_manager.sh` 时，脚本会在显示菜单**之前**检查 GitHub 是否有新版本。如果有更新，会自动执行 `git pull`，提示更新完成并退出。重新运行脚本即可继续。
+
+### 手动更新
+
+```bash
+cd ~/vps-upgrade-scripts
+git pull
+sudo bash cpa_cli_vps_manager.sh
+```
+
+如果 `git clone` 提示 `fatal: destination path 'vps-upgrade-scripts' already exists and is not an empty directory`，说明你之前已经克隆过。直接 `cd` 进目录执行 `git pull` 即可。
 
 ---
 
