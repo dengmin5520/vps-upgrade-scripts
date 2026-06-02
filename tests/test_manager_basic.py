@@ -20,6 +20,7 @@ def run_manager(input_text: str, mockbin: Path, euid: str = "0", test_root: Path
     env["CPA_CLI_MANAGER_TEST_EUID"] = euid
     if test_root is not None:
         env["CPA_CLI_MANAGER_TEST_ROOT"] = str(test_root)
+    env["CPA_CLI_MANAGER_SKIP_SELF_UPDATE"] = "1"
     return subprocess.run(
         ["bash", str(SCRIPT)],
         input=input_text,
