@@ -96,23 +96,39 @@ ensure_cli_config(){
   if [[ -z "$secret" ]]; then log "CLIProxyAPI 管理密码为空，拒绝写入配置。"; return 1; fi
   if [[ -f "$cfg" ]]; then cp "$cfg" "$cfg.bak-$(date +%Y%m%d%H%M%S)" || true; fi
   python3 -c '
-import sys, pathlib, json
+import sys, pathlib, json, re
 p=pathlib.Path(sys.argv[1]); secret=sys.stdin.read().rstrip("\n")
 text=p.read_text() if p.exists() else ""
 lines=text.splitlines()
 quoted=json.dumps(secret, ensure_ascii=False)
 out=[]; i=0; rm_done=False; usage_done=False
+
+def top_level(line):
+    return bool(line) and not line.startswith((" ", "\t"))
+
 while i < len(lines):
     line=lines[i]
     if line.startswith("remote-management:"):
         if not rm_done:
-            out += ["remote-management:", "  allow-remote: true", "  secret-key: "+quoted]; rm_done=True
+            out += ["remote-management:", "  allow-remote: true", "  secret-key: "+quoted]
+            rm_done=True
         i += 1
-        while i < len(lines) and (lines[i].startswith(" ") or lines[i].startswith("\t")): i += 1
+        # Skip the whole original remote-management block.  The upstream sample
+        # may contain indented comments separated by blank lines; stopping on a
+        # blank line leaves duplicate allow-remote / secret-key entries and makes
+        # CLIProxyAPI fail YAML parsing.
+        while i < len(lines):
+            nxt=lines[i]
+            if top_level(nxt):
+                break
+            i += 1
         continue
-    if line.startswith("usage-statistics-enabled:"):
-        if not usage_done: out.append("usage-statistics-enabled: true"); usage_done=True
-        i += 1; continue
+    if re.match(r"^usage-statistics-enabled\s*:", line):
+        if not usage_done:
+            out.append("usage-statistics-enabled: true")
+            usage_done=True
+        i += 1
+        continue
     out.append(line); i += 1
 if not rm_done: out += ["remote-management:", "  allow-remote: true", "  secret-key: "+quoted]
 if not usage_done: out.append("usage-statistics-enabled: true")
