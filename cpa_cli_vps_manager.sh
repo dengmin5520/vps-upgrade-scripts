@@ -103,7 +103,7 @@ p=pathlib.Path(sys.argv[1]); secret=sys.stdin.read().rstrip("\n")
 text=p.read_text() if p.exists() else ""
 lines=text.splitlines()
 quoted=json.dumps(secret, ensure_ascii=False)
-out=[]; i=0; rm_done=False; usage_done=False
+out=[]; i=0; rm_done=False; usage_done=False; port_done=False
 
 def top_level(line):
     return bool(line) and not line.startswith((" ", "\t"))
@@ -131,7 +131,16 @@ while i < len(lines):
             usage_done=True
         i += 1
         continue
+    if re.match(r"^port\s*:", line):
+        if not port_done:
+            out.append("port: 8317")
+            port_done=True
+        i += 1
+        continue
     out.append(line); i += 1
+# Ensure port is always first for readability
+if not port_done:
+    out.insert(0, "port: 8317")
 if not rm_done: out += ["remote-management:", "  allow-remote: true", "  secret-key: "+quoted]
 if not usage_done: out.append("usage-statistics-enabled: true")
 p.write_text("\n".join(out).rstrip()+"\n")
