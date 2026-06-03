@@ -621,13 +621,13 @@ public_access_reverse_proxy_menu(){ while true; do detect_state; print_state; ca
 EOF
 printf '请输入选项 [1-4]：'; local c; read -r c || c=4; case "$c" in 1) configure_public_access cli; pause_return;; 2) configure_public_access keeper; pause_return;; 3) configure_public_access both; pause_return;; 4) return;; *) log "无效选项，请重新输入。";; esac; done; }
 require_cli_secret_or_prompt(){
-  local varname="$1" secret
-  secret="$(read_cli_secret || true)"
-  if [[ -z "$secret" ]]; then
+  local varname="$1" cli_secret
+  cli_secret="$(read_cli_secret || true)"
+  if [[ -z "$cli_secret" ]]; then
     log "无法从现有配置读取 CLIProxyAPI 管理密码。为避免把密码覆盖为空，请重新输入。"
-    read_secret_twice "请输入 CLIProxyAPI 管理密码：" "请再次输入 CLIProxyAPI 管理密码：" secret || return 1
+    read_secret_twice "请输入 CLIProxyAPI 管理密码：" "请再次输入 CLIProxyAPI 管理密码：" cli_secret || return 1
   fi
-  printf -v "$varname" '%s' "$secret"
+  printf -v "$varname" '%s' "$cli_secret"
 }
 allow_ip_port(){
   detect_state
