@@ -441,55 +441,103 @@ install_pkg(){
 }
 valid_domain(){ [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]]; }
 write_nginx_conf(){
-  local domain="$1" conf; conf="$(root_path "$NGINX_CONF")"; mkdir -p "$(dirname "$conf")"; [[ -f "$conf" ]] && cp "$conf" "$conf.bak-$(date +%Y%m%d%H%M%S)"
+  local domain="$1" mode="${2:-both}" conf; conf="$(root_path "$NGINX_CONF")"; mkdir -p "$(dirname "$conf")"; [[ -f "$conf" ]] && cp "$conf" "$conf.bak-$(date +%Y%m%d%H%M%S)"
   cat > "$conf" <<EOF
 server {
     listen 80;
     server_name $domain;
     client_max_body_size 50m;
+EOF
+  if [[ "$mode" == "cli" || "$mode" == "both" ]]; then
+    cat >> "$conf" <<'EOF'
     location / {
         proxy_pass http://127.0.0.1:8317;
         proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
+    }
+EOF
+  fi
+  if [[ "$mode" == "keeper" || "$mode" == "both" ]]; then
+    cat >> "$conf" <<'EOF'
+    location = /cpa {
+        return 301 /cpa/;
     }
     location /cpa/ {
         proxy_pass http://127.0.0.1:8080/cpa/;
         proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
     }
+EOF
+  fi
+  if [[ "$mode" == "keeper" ]]; then
+    cat >> "$conf" <<'EOF'
+    location / {
+        return 302 /cpa/;
+    }
+EOF
+  fi
+  cat >> "$conf" <<'EOF'
 }
 EOF
 }
+public_access_label(){
+  case "$1" in
+    cli) printf 'CLIProxyAPI' ;;
+    keeper) printf 'cpa-usage-keeper' ;;
+    both) printf 'CLIProxyAPI + cpa-usage-keeper' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+public_access_urls(){
+  local scheme="$1" domain="$2" mode="$3" label; label="$(public_access_label "$mode")"
+  case "$mode" in
+    cli) log "$label 访问地址：$scheme://$domain/management.html" ;;
+    keeper) log "$label 访问地址：$scheme://$domain/cpa/" ;;
+    both) log "$label 访问地址：$scheme://$domain/management.html 和 $scheme://$domain/cpa/" ;;
+  esac
+}
 configure_public_access(){
-  detect_state; [[ "$DOCKER_AVAILABLE" != 1 ]] && { log "宿主机当前无可用 Docker，无法配置公网访问。"; return; }; [[ "$CLI_RUNNING" != 1 ]] && { log "未检测到正在运行的 cli-proxy-api 容器。请先安装或修复 CLIProxyAPI。"; return; }
-  [[ "$KEEPER_EXISTS" != 1 ]] && log "未检测到 cpa-usage-keeper 容器。本次将只配置 CLIProxyAPI 的公网访问。"; [[ "$KEEPER_EXISTS" == 1 && "$KEEPER_RUNNING" != 1 ]] && log "检测到 cpa-usage-keeper 容器存在但未运行。本次将只配置 CLIProxyAPI 的公网访问。"
+  local mode="${1:-both}"
+  case "$mode" in cli|keeper|both) ;; *) log "未知公网访问配置模式：$mode"; return 1;; esac
+  detect_state; [[ "$DOCKER_AVAILABLE" != 1 ]] && { log "宿主机当前无可用 Docker，无法配置公网访问。"; return; }
+  if [[ "$mode" == "cli" || "$mode" == "both" ]]; then
+    [[ "$CLI_RUNNING" != 1 ]] && { log "未检测到正在运行的 cli-proxy-api 容器。请先安装或修复 CLIProxyAPI。"; return; }
+  fi
+  if [[ "$mode" == "keeper" || "$mode" == "both" ]]; then
+    [[ "$KEEPER_RUNNING" != 1 ]] && { log "未检测到正在运行的 cpa-usage-keeper 容器。请先安装或修复 cpa-usage-keeper。"; return; }
+  fi
   local domain ip resolved; printf '请输入已经解析到本 VPS 的域名，例如 example.com：'; read -r domain || domain=""
   valid_domain "$domain" || { log "域名格式不合法，已取消。"; return; }
   ip="$(public_ip)"; resolved="$(getent hosts "$domain" 2>/dev/null | awk '{print $1}' | tr '\n' ' ' || true)"
   if [[ -n "$ip" && -n "$resolved" && "$resolved" != *"$ip"* ]]; then log "警告：当前域名解析结果似乎没有指向本 VPS 公网 IP。当前 IP：$ip 域名解析：$resolved"; confirm "是否仍然继续配置？输入 Y 确认，其他任意键取消，默认 N：" || { log "已取消配置公网访问。"; return; }; fi
   cat <<EOF
-即将配置公网访问：
+即将配置 $(public_access_label "$mode") 公网访问：
 - 写入 Nginx HTTP 反向代理配置：$NGINX_CONF
 - 开放系统防火墙 80/tcp 和 443/tcp
 - 自动申请 HTTPS 证书，不强制 HTTP 跳转 HTTPS
 - certbot 失败时保留 HTTP 配置
 EOF
+  if [[ "$mode" == "keeper" || "$mode" == "both" ]]; then
+    cat <<'EOF'
+- cpa-usage-keeper 将通过 /cpa/ 反代，并在 HTTPS 成功后尝试更新 CPA_PUBLIC_URL，保证“返回 CPA”功能指向公网域名
+EOF
+  fi
   confirm "是否继续？输入 Y 确认，其他任意键取消，默认 N：" || { log "已取消配置公网访问。"; return; }
   has_cmd nginx || { log "未检测到 Nginx，将安装 Nginx。"; install_pkg nginx || return; systemctl enable nginx || true; systemctl start nginx || true; }
   local conf backup https_ok=0
   conf="$(root_path "$NGINX_CONF")"
   [[ -f "$conf" ]] && backup="$conf.pre-public-access-$(date +%Y%m%d%H%M%S).bak" && cp "$conf" "$backup" || backup=""
-  write_nginx_conf "$domain"
+  write_nginx_conf "$domain" "$mode"
   if ! nginx -t; then
     [[ -n "$backup" && -f "$backup" ]] && cp "$backup" "$conf"
     log "Nginx 配置测试失败，已恢复旧配置，不 reload。"
@@ -500,23 +548,44 @@ EOF
   if has_cmd certbot && certbot --nginx -d "$domain" --non-interactive --agree-tos --register-unsafely-without-email --no-redirect; then
     if nginx -t; then systemctl reload nginx || true; fi
     https_ok=1
-    log "HTTPS 证书申请成功。HTTPS：https://$domain/management.html 和 https://$domain/cpa/"
+    log "HTTPS 证书申请成功。"
+    public_access_urls https "$domain" "$mode"
   else
-    log "certbot 申请证书失败，已保留 HTTP 反代配置。HTTP：http://$domain/management.html 和 http://$domain/cpa/"
+    log "certbot 申请证书失败，已保留 HTTP 反代配置。"
+    public_access_urls http "$domain" "$mode"
   fi
-  if [[ "$KEEPER_RUNNING" == 1 && "$https_ok" == 1 ]]; then
-    local cur login cpakey; cur="$(get_env_value "$KEEPER_CONTAINER" CPA_PUBLIC_URL || true)"
-    if [[ "$cur" != "https://$domain" ]]; then
-      log "检测到 cpa-usage-keeper 的 CPA_PUBLIC_URL 可能需要更新为 https://$domain。"
-      if confirm "是否允许重建 cpa-usage-keeper 以更新 CPA_PUBLIC_URL？输入 Y 确认，其他任意键跳过，默认 N："; then
-        login="$(get_env_value "$KEEPER_CONTAINER" LOGIN_PASSWORD || true)"; cpakey="$(get_env_value "$KEEPER_CONTAINER" CPA_MANAGEMENT_KEY || true)"
-        [[ -n "$login" && -n "$cpakey" ]] && recreate_keeper "$login" "$cpakey" "https://$domain" || log "无法读取 Keeper secret，已跳过重建。"
+  if [[ "$mode" == "keeper" || "$mode" == "both" ]]; then
+    if [[ "$KEEPER_RUNNING" == 1 && "$https_ok" == 1 ]]; then
+      local cur login cpakey; cur="$(get_env_value "$KEEPER_CONTAINER" CPA_PUBLIC_URL || true)"
+      if [[ "$cur" != "https://$domain" ]]; then
+        log "检测到 cpa-usage-keeper 的 CPA_PUBLIC_URL 需要更新为 https://$domain，用于保证“返回 CPA”功能可用。"
+        if confirm "是否允许重建 cpa-usage-keeper 以更新 CPA_PUBLIC_URL？输入 Y 确认，其他任意键跳过，默认 N："; then
+          login="$(get_env_value "$KEEPER_CONTAINER" LOGIN_PASSWORD || true)"; cpakey="$(get_env_value "$KEEPER_CONTAINER" CPA_MANAGEMENT_KEY || true)"
+          if [[ -n "$login" && -n "$cpakey" ]]; then
+            recreate_keeper "$login" "$cpakey" "https://$domain" && log "已更新 CPA_PUBLIC_URL。请登录 cpa-usage-keeper 测试“返回 CPA”按钮是否能跳回 https://$domain。"
+          else
+            log "无法读取 Keeper secret，已跳过重建。CPA_PUBLIC_URL 未更新，“返回 CPA”功能可能仍指向旧地址。"
+          fi
+        else
+          log "已跳过 CPA_PUBLIC_URL 更新。“返回 CPA”功能可能仍指向旧地址。"
+        fi
+      else
+        log "cpa-usage-keeper 的 CPA_PUBLIC_URL 已是 https://$domain。请登录测试“返回 CPA”功能。"
       fi
+    elif [[ "$KEEPER_RUNNING" == 1 ]]; then
+      log "HTTPS 未配置成功，已跳过 CPA_PUBLIC_URL 更新，避免返回地址指向不可用 HTTPS。"
     fi
-  elif [[ "$KEEPER_RUNNING" == 1 ]]; then
-    log "HTTPS 未配置成功，已跳过 CPA_PUBLIC_URL 更新，避免返回地址指向不可用 HTTPS。"
+    log "注意：如果 cpa-usage-keeper 页面里的“返回 CPA”功能仍不可用，说明现有镜像/前端可能不支持 CPA_PUBLIC_URL 覆盖，需要重构 cpa-usage-keeper 后再重新部署。"
   fi
 }
+public_access_reverse_proxy_menu(){ while true; do detect_state; print_state; cat <<'EOF'
+请选择要配置的公网访问服务：
+1. 配置 cliproxyapi 公网访问
+2. 配置 cpa-usage-keeper 公网访问
+3. 配置 cliproxyapi + cpa-usage-keeper 公网访问
+4. 退出
+EOF
+printf '请输入选项 [1-4]：'; local c; read -r c || c=4; case "$c" in 1) configure_public_access cli; pause_return;; 2) configure_public_access keeper; pause_return;; 3) configure_public_access both; pause_return;; 4) return;; *) log "无效选项，请重新输入。";; esac; done; }
 require_cli_secret_or_prompt(){
   local varname="$1" secret
   secret="$(read_cli_secret || true)"
@@ -579,7 +648,7 @@ public_access_menu(){ while true; do detect_state; print_state; cat <<'EOF'
 3. 禁止 IP + 端口访问 CLIProxyAPI
 4. 返回主菜单
 EOF
-printf '请输入选项 [1-4]：'; local c; read -r c || c=4; case "$c" in 1) configure_public_access; pause_return;; 2) allow_ip_port; pause_return;; 3) forbid_ip_port; pause_return;; 4) return;; *) log "无效选项，请重新输入。";; esac; done; }
+printf '请输入选项 [1-4]：'; local c; read -r c || c=4; case "$c" in 1) public_access_reverse_proxy_menu;; 2) allow_ip_port; pause_return;; 3) forbid_ip_port; pause_return;; 4) return;; *) log "无效选项，请重新输入。";; esac; done; }
 main_menu(){ while true; do detect_state; cat <<'EOF'
 ========================================
  CPA + CLIProxyAPI VPS 管理脚本
