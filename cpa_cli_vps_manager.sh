@@ -23,6 +23,15 @@ root_path(){ local p="$1"; [[ -n "${CPA_CLI_MANAGER_TEST_ROOT:-}" ]] && printf '
 run(){ "$@"; }
 log(){ printf '%s\n' "$*"; }
 has_cmd(){ command -v "$1" >/dev/null 2>&1; }
+git_repo_cmd(){
+  local repo="$1" owner; shift
+  owner="$(stat -c '%U' "$repo/.git" 2>/dev/null || stat -c '%U' "$repo" 2>/dev/null || true)"
+  if [[ "$(effective_euid)" == "0" && -n "$owner" && "$owner" != "root" ]] && has_cmd sudo; then
+    sudo -u "$owner" git -C "$repo" "$@"
+  else
+    git -C "$repo" "$@"
+  fi
+}
 
 require_root(){
   if [[ "$(effective_euid)" != "0" ]]; then
@@ -333,24 +342,24 @@ self_update_check(){
   log "正在检查管理脚本是否有新版本..."
   [[ -d "$SCRIPT_REPO/.git" ]] || { log "未检测到 Git 仓库，跳过脚本自更新检查。"; return 0; }
   local branch head remote behind ahead
-  branch="$(git -C "$SCRIPT_REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  branch="$(git_repo_cmd "$SCRIPT_REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   [[ -n "$branch" && "$branch" != "HEAD" ]] || branch="main"
-  if ! git -C "$SCRIPT_REPO" fetch origin "$branch" >/dev/null 2>&1; then
+  if ! git_repo_cmd "$SCRIPT_REPO" fetch origin "$branch" >/dev/null 2>&1; then
     log "无法检查 GitHub 脚本版本（网络不通或权限问题），本次操作已取消，避免用旧脚本继续写配置。"
     return 1
   fi
-  head="$(git -C "$SCRIPT_REPO" rev-parse HEAD 2>/dev/null || true)"
-  remote="$(git -C "$SCRIPT_REPO" rev-parse "origin/$branch" 2>/dev/null || true)"
+  head="$(git_repo_cmd "$SCRIPT_REPO" rev-parse HEAD 2>/dev/null || true)"
+  remote="$(git_repo_cmd "$SCRIPT_REPO" rev-parse "origin/$branch" 2>/dev/null || true)"
   if [[ -z "$head" || -z "$remote" ]]; then
     log "无法比较脚本版本，跳过自更新检查。"
     return 0
   fi
   if [[ "$head" != "$remote" ]]; then
-    behind="$(git -C "$SCRIPT_REPO" rev-list --count "HEAD..origin/$branch" 2>/dev/null || echo 0)"
-    ahead="$(git -C "$SCRIPT_REPO" rev-list --count "origin/$branch..HEAD" 2>/dev/null || echo 0)"
+    behind="$(git_repo_cmd "$SCRIPT_REPO" rev-list --count "HEAD..origin/$branch" 2>/dev/null || echo 0)"
+    ahead="$(git_repo_cmd "$SCRIPT_REPO" rev-list --count "origin/$branch..HEAD" 2>/dev/null || echo 0)"
     if [[ "${behind:-0}" -gt 0 && "${ahead:-0}" -eq 0 ]]; then
       log "发现脚本新版本（落后 ${behind} 个提交），正在自动更新..."
-      if git -C "$SCRIPT_REPO" pull --ff-only origin "$branch" >/dev/null 2>&1; then
+      if git_repo_cmd "$SCRIPT_REPO" pull --ff-only origin "$branch" >/dev/null 2>&1; then
         log "脚本已更新到最新版本。请重新运行：sudo bash $SCRIPT_NAME"
         exit 0
       else
@@ -691,6 +700,8 @@ main_menu(){ while true; do detect_state; cat <<'EOF'
 EOF
 printf '请输入选项 [1-5]：'; local c; read -r c || c=5; case "$c" in 1) install_menu;; 2) upgrade_menu;; 3) uninstall_menu;; 4) public_access_menu;; 5) log "已退出。"; return 0;; *) log "无效选项，请重新输入。";; esac; done; }
 
-require_root
-self_update_check
-main_menu
+if [[ "${CPA_CLI_MANAGER_SOURCE_ONLY:-}" != "1" ]]; then
+  require_root
+  self_update_check
+  main_menu
+fi
