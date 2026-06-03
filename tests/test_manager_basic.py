@@ -244,7 +244,7 @@ class ManagerBasicTests(unittest.TestCase):
             base = Path(d)
             root = base / "rootfs"
             mockbin, log = make_mockbin(base, docker_mode="ok", cli_exists=True, cli_running=True, keeper_exists=True, keeper_running=True, certbot_success=False)
-            result = run_manager("4\n1\nexample.com\nY\n\n4\n5\n", mockbin, test_root=root)
+            result = run_manager("4\n1\n3\nexample.com\nY\n\n4\n4\n5\n", mockbin, test_root=root)
             calls = log.read_text()
             conf = root / "etc/nginx/conf.d/cpa-cli-proxy.conf"
             conf_text = conf.read_text()
@@ -262,11 +262,14 @@ class ManagerBasicTests(unittest.TestCase):
     def test_public_access_menu_contains_https_options(self):
         with tempfile.TemporaryDirectory() as d:
             mockbin, _ = make_mockbin(Path(d), docker_mode="ok")
-            result = run_manager("4\n4\n5\n", mockbin)
+            result = run_manager("4\n1\n4\n4\n5\n", mockbin)
         self.assertEqual(result.returncode, 0)
         self.assertIn("配置公网访问", result.stdout)
         self.assertIn("允许 IP + 端口访问 CLIProxyAPI", result.stdout)
         self.assertIn("禁止 IP + 端口访问 CLIProxyAPI", result.stdout)
+        self.assertIn("配置 cliproxyapi 公网访问", result.stdout)
+        self.assertIn("配置 cpa-usage-keeper 公网访问", result.stdout)
+        self.assertIn("配置 cliproxyapi + cpa-usage-keeper 公网访问", result.stdout)
 
     def test_cli_recreate_preserves_existing_port_and_mounts(self):
         with tempfile.TemporaryDirectory() as d:
