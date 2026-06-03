@@ -174,6 +174,18 @@ container_port_specs(){
 }
 default_cli_port_spec(){ local bind="${1:-public}"; if [[ "$bind" == "local" ]]; then printf '127.0.0.1:8317:8317\n'; else printf '8317:8317\n'; fi; }
 default_keeper_port_spec(){ printf '127.0.0.1:8080:8080\n'; }
+container_host_endpoint(){
+  local c="$1" private_port="$2" fallback="$3" line hostport host port
+  line="$(docker port "$c" "$private_port/tcp" 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$line" && "$line" == *"->"* ]]; then
+    hostport="${line##*-> }"
+    host="${hostport%:*}"; port="${hostport##*:}"
+    host="${host#[}"; host="${host%]}"
+    [[ -z "$host" || "$host" == "0.0.0.0" || "$host" == "::" ]] && host="127.0.0.1"
+    if [[ -n "$port" && "$port" =~ ^[0-9]+$ ]]; then printf '%s:%s\n' "$host" "$port"; return 0; fi
+  fi
+  printf '%s\n' "$fallback"
+}
 port_is_public(){ docker port "$CLI_CONTAINER" 8317/tcp 2>/dev/null | grep -Eq '0\.0\.0\.0:8317|:::8317|:8317$' && ! docker port "$CLI_CONTAINER" 8317/tcp 2>/dev/null | grep -q '127.0.0.1:8317'; }
 backup_container(){
   local c="$1" d
@@ -441,7 +453,7 @@ install_pkg(){
 }
 valid_domain(){ [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]]; }
 write_nginx_conf(){
-  local domain="$1" mode="${2:-both}" conf; conf="$(root_path "$NGINX_CONF")"; mkdir -p "$(dirname "$conf")"; [[ -f "$conf" ]] && cp "$conf" "$conf.bak-$(date +%Y%m%d%H%M%S)"
+  local domain="$1" mode="${2:-both}" cli_endpoint="${3:-127.0.0.1:8317}" keeper_endpoint="${4:-127.0.0.1:8080}" conf; conf="$(root_path "$NGINX_CONF")"; mkdir -p "$(dirname "$conf")"; [[ -f "$conf" ]] && cp "$conf" "$conf.bak-$(date +%Y%m%d%H%M%S)"
   cat > "$conf" <<EOF
 server {
     listen 80;
@@ -449,32 +461,32 @@ server {
     client_max_body_size 50m;
 EOF
   if [[ "$mode" == "cli" || "$mode" == "both" ]]; then
-    cat >> "$conf" <<'EOF'
+    cat >> "$conf" <<EOF
     location / {
-        proxy_pass http://127.0.0.1:8317;
+        proxy_pass http://$cli_endpoint;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
     }
 EOF
   fi
   if [[ "$mode" == "keeper" || "$mode" == "both" ]]; then
-    cat >> "$conf" <<'EOF'
+    cat >> "$conf" <<EOF
     location = /cpa {
         return 301 /cpa/;
     }
     location /cpa/ {
-        proxy_pass http://127.0.0.1:8080/cpa/;
+        proxy_pass http://$keeper_endpoint/cpa/;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
     }
 EOF
@@ -501,9 +513,9 @@ public_access_label(){
 public_access_urls(){
   local scheme="$1" domain="$2" mode="$3" label; label="$(public_access_label "$mode")"
   case "$mode" in
-    cli) log "$label 访问地址：$scheme://$domain/management.html" ;;
-    keeper) log "$label 访问地址：$scheme://$domain/cpa/" ;;
-    both) log "$label 访问地址：$scheme://$domain/management.html 和 $scheme://$domain/cpa/" ;;
+    cli) log "反代后的网址：$scheme://$domain/management.html" ;;
+    keeper) log "反代后的网址：$scheme://$domain/cpa/" ;;
+    both) log "反代后的网址：$scheme://$domain/management.html 和 $scheme://$domain/cpa/" ;;
   esac
 }
 configure_public_access(){
@@ -516,10 +528,12 @@ configure_public_access(){
   if [[ "$mode" == "keeper" || "$mode" == "both" ]]; then
     [[ "$KEEPER_RUNNING" != 1 ]] && { log "未检测到正在运行的 cpa-usage-keeper 容器。请先安装或修复 cpa-usage-keeper。"; return; }
   fi
-  local domain ip resolved; printf '请输入已经解析到本 VPS 的域名，例如 example.com：'; read -r domain || domain=""
+  local domain ip resolved cli_endpoint keeper_endpoint; printf '请输入已经解析到本 VPS 的域名，例如 example.com：'; read -r domain || domain=""
   valid_domain "$domain" || { log "域名格式不合法，已取消。"; return; }
   ip="$(public_ip)"; resolved="$(getent hosts "$domain" 2>/dev/null | awk '{print $1}' | tr '\n' ' ' || true)"
   if [[ -n "$ip" && -n "$resolved" && "$resolved" != *"$ip"* ]]; then log "警告：当前域名解析结果似乎没有指向本 VPS 公网 IP。当前 IP：$ip 域名解析：$resolved"; confirm "是否仍然继续配置？输入 Y 确认，其他任意键取消，默认 N：" || { log "已取消配置公网访问。"; return; }; fi
+  cli_endpoint="$(container_host_endpoint "$CLI_CONTAINER" 8317 "127.0.0.1:8317")"
+  keeper_endpoint="$(container_host_endpoint "$KEEPER_CONTAINER" 8080 "127.0.0.1:8080")"
   cat <<EOF
 即将配置 $(public_access_label "$mode") 公网访问：
 - 写入 Nginx HTTP 反向代理配置：$NGINX_CONF
@@ -527,6 +541,8 @@ configure_public_access(){
 - 自动申请 HTTPS 证书，不强制 HTTP 跳转 HTTPS
 - certbot 失败时保留 HTTP 配置
 EOF
+  if [[ "$mode" == "cli" || "$mode" == "both" ]]; then log "CLIProxyAPI 本机反代目标：http://$cli_endpoint"; fi
+  if [[ "$mode" == "keeper" || "$mode" == "both" ]]; then log "cpa-usage-keeper 本机反代目标：http://$keeper_endpoint/cpa/"; fi
   if [[ "$mode" == "keeper" || "$mode" == "both" ]]; then
     cat <<'EOF'
 - cpa-usage-keeper 将通过 /cpa/ 反代，并在 HTTPS 成功后尝试更新 CPA_PUBLIC_URL，保证“返回 CPA”功能指向公网域名
@@ -537,7 +553,7 @@ EOF
   local conf backup https_ok=0
   conf="$(root_path "$NGINX_CONF")"
   [[ -f "$conf" ]] && backup="$conf.pre-public-access-$(date +%Y%m%d%H%M%S).bak" && cp "$conf" "$backup" || backup=""
-  write_nginx_conf "$domain" "$mode"
+  write_nginx_conf "$domain" "$mode" "$cli_endpoint" "$keeper_endpoint"
   if ! nginx -t; then
     [[ -n "$backup" && -f "$backup" ]] && cp "$backup" "$conf"
     log "Nginx 配置测试失败，已恢复旧配置，不 reload。"
@@ -562,7 +578,13 @@ EOF
         if confirm "是否允许重建 cpa-usage-keeper 以更新 CPA_PUBLIC_URL？输入 Y 确认，其他任意键跳过，默认 N："; then
           login="$(get_env_value "$KEEPER_CONTAINER" LOGIN_PASSWORD || true)"; cpakey="$(get_env_value "$KEEPER_CONTAINER" CPA_MANAGEMENT_KEY || true)"
           if [[ -n "$login" && -n "$cpakey" ]]; then
-            recreate_keeper "$login" "$cpakey" "https://$domain" && log "已更新 CPA_PUBLIC_URL。请登录 cpa-usage-keeper 测试“返回 CPA”按钮是否能跳回 https://$domain。"
+            if recreate_keeper "$login" "$cpakey" "https://$domain"; then
+              keeper_endpoint="$(container_host_endpoint "$KEEPER_CONTAINER" 8080 "$keeper_endpoint")"
+              write_nginx_conf "$domain" "$mode" "$cli_endpoint" "$keeper_endpoint"
+              if nginx -t; then systemctl reload nginx || true; log "cpa-usage-keeper 重建后已重新写入并 reload 反代配置，当前反代目标：http://$keeper_endpoint/cpa/"; else log "cpa-usage-keeper 重建后 Nginx 配置测试失败，请检查 $NGINX_CONF。"; fi
+              log "已更新 CPA_PUBLIC_URL。请登录 cpa-usage-keeper 测试“返回 CPA”按钮是否能跳回 https://$domain。"
+              public_access_urls https "$domain" "$mode"
+            fi
           else
             log "无法读取 Keeper secret，已跳过重建。CPA_PUBLIC_URL 未更新，“返回 CPA”功能可能仍指向旧地址。"
           fi
