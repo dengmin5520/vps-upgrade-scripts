@@ -125,7 +125,7 @@ while i < len(lines):
             if nxt.startswith("#") or nxt.startswith(" ") or nxt.startswith("\t") or nxt.strip()=="":
                 i += 1
                 continue
-            # It's a real top-level key — stop skipping
+            # It is a real top-level key — stop skipping
             break
         continue
     if re.match(r"^usage-statistics-enabled\s*:", line):
@@ -227,8 +227,8 @@ keeper_env_file(){
   {
     printf 'CPA_BASE_URL=http://cli-proxy-api:8317\n'
     printf 'CPA_MANAGEMENT_KEY=%s\n' "$cpakey"
-    printf 'LOGIN_PASSWORD=*** "$login"
-    printf 'AUTH_ENABLED=true\n...7\n'
+    printf 'LOGIN_PASSWORD=%s\n' "$login"
+    printf 'AUTH_ENABLED=true\nAPP_BASE_PATH=/cpa\nAPP_PORT=8080\nREDIS_QUEUE_ADDR=cli-proxy-api:8317\n'
     [[ -n "$public_url" ]] && printf 'CPA_PUBLIC_URL=%s\n' "$public_url"
   } > "$f"
   printf '%s' "$f"
