@@ -162,15 +162,15 @@ sys.exit(1)
 PY
 }
 get_env_value(){ docker inspect "$1" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | awk -F= -v k="$2" '$1==k{print substr($0,length(k)+2); exit}'; }
-container_networks(){ docker inspect "$1" --format '{{range $n,$v := .NetworkSettings.Networks}}{{println $n}}{{end}}' 2>/dev/null | sed '/^$/d' || true; }
+container_networks(){ docker inspect "$1" --format '{{range $n,$v := .NetworkSettings.Networks}}{{printf "%s\n" $n}}{{end}}' 2>/dev/null | sed '/^$/d' || true; }
 container_mount_args(){
   local c="$1"
-  docker inspect "$c" --format '{{range .Mounts}}{{println .Source "|" .Destination}}{{end}}' 2>/dev/null | while IFS='|' read -r s d; do [[ -n "$s" && -n "$d" ]] && printf '%s:%s\n' "$s" "$d"; done
+  docker inspect "$c" --format '{{range .Mounts}}{{printf "%s|%s\n" .Source .Destination}}{{end}}' 2>/dev/null | while IFS='|' read -r s d; do [[ -n "$s" && -n "$d" ]] && printf '%s:%s\n' "$s" "$d"; done
 }
 container_restart(){ docker inspect "$1" --format '{{.HostConfig.RestartPolicy.Name}}' 2>/dev/null || printf 'unless-stopped'; }
 container_port_specs(){
   local c="$1"
-  docker inspect "$c" --format '{{range $p,$arr := .HostConfig.PortBindings}}{{range $arr}}{{println .HostIp "|" .HostPort "|" $p}}{{end}}{{end}}' 2>/dev/null | while IFS='|' read -r hip hport cport; do
+  docker inspect "$c" --format '{{range $p,$arr := .HostConfig.PortBindings}}{{range $arr}}{{printf "%s|%s|%s\n" .HostIp .HostPort $p}}{{end}}{{end}}' 2>/dev/null | while IFS='|' read -r hip hport cport; do
     [[ -n "$hport" && -n "$cport" ]] || continue
     if [[ -n "$hip" && "$hip" != "0.0.0.0" && "$hip" != "::" ]]; then printf '%s:%s:%s\n' "$hip" "$hport" "$cport"; else printf '%s:%s\n' "$hport" "$cport"; fi
   done
