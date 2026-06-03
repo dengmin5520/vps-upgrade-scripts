@@ -9,7 +9,8 @@ This repository currently provides:
 
 - `cpa_cli_vps_manager.sh` — interactive VPS management script.
 - `upgrade_cpa_cli_containers_template.sh` — older dry-run-first container upgrade template.
-- `tests/test_manager_basic.py` — local mock tests for the manager script.
+- `tests/test_manager_basic.py` — older Python mock tests for the manager script.
+- `test_cpa_cli_vps_manager.sh` — Bash mock regression suite for the interactive manager and dangerous host operations.
 
 > This project is a helper wrapper. It is not an official CLIProxyAPI or cpa-usage-keeper project.
 
@@ -158,8 +159,12 @@ The tests use mock commands and do not install Docker or touch real Nginx/certbo
 
 ```bash
 bash -n cpa_cli_vps_manager.sh
+bash -n test_cpa_cli_vps_manager.sh
+bash test_cpa_cli_vps_manager.sh
 python3 -m unittest discover -s tests -v
 ```
+
+The Bash regression suite covers config patching, Docker inspect parsing, install/upgrade/recreate paths, safe cancel defaults, IP-port allow/deny behavior, and Nginx reverse-proxy failure handling without touching the real host.
 
 ---
 
@@ -185,7 +190,8 @@ Thanks to the maintainers and contributors of both projects.
 
 - `cpa_cli_vps_manager.sh` — 交互式 VPS 管理脚本。
 - `upgrade_cpa_cli_containers_template.sh` — 旧版 dry-run 优先的容器升级模板。
-- `tests/test_manager_basic.py` — 本地 mock 测试。
+- `tests/test_manager_basic.py` — 旧版 Python mock 测试。
+- `test_cpa_cli_vps_manager.sh` — Bash mock 回归测试，覆盖交互式菜单和危险宿主机操作。
 
 > 本项目只是辅助封装脚本，不是 CLIProxyAPI 或 cpa-usage-keeper 官方项目。
 
@@ -333,8 +339,12 @@ sudo bash cpa_cli_vps_manager.sh
 
 ```bash
 bash -n cpa_cli_vps_manager.sh
+bash -n test_cpa_cli_vps_manager.sh
+bash test_cpa_cli_vps_manager.sh
 python3 -m unittest discover -s tests -v
 ```
+
+Bash 回归测试覆盖配置修补、Docker inspect 解析、安装/升级/重建路径、安全取消默认值、IP+端口允许/禁止，以及 Nginx 反代失败恢复。
 
 ---
 
