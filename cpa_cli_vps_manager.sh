@@ -162,7 +162,7 @@ sys.exit(1)
 PY
 }
 get_env_value(){ docker inspect "$1" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | awk -F= -v k="$2" '$1==k{print substr($0,length(k)+2); exit}'; }
-container_networks(){ docker inspect "$1" --format '{{range $n,$v := .NetworkSettings.Networks}}{{println $n}}{{end}}' 2>/dev/null || true; }
+container_networks(){ docker inspect "$1" --format '{{range $n,$v := .NetworkSettings.Networks}}{{println $n}}{{end}}' 2>/dev/null | sed '/^$/d' || true; }
 container_mount_args(){
   local c="$1"
   docker inspect "$c" --format '{{range .Mounts}}{{println .Source "|" .Destination}}{{end}}' 2>/dev/null | while IFS='|' read -r s d; do [[ -n "$s" && -n "$d" ]] && printf '%s:%s\n' "$s" "$d"; done
@@ -172,7 +172,7 @@ container_port_specs(){
   local c="$1"
   docker inspect "$c" --format '{{range $p,$arr := .HostConfig.PortBindings}}{{range $arr}}{{println .HostIp "|" .HostPort "|" $p}}{{end}}{{end}}' 2>/dev/null | while IFS='|' read -r hip hport cport; do
     [[ -n "$hport" && -n "$cport" ]] || continue
-    if [[ -n "$hip" ]]; then printf '%s:%s:%s\n' "$hip" "$hport" "$cport"; else printf '%s:%s\n' "$hport" "$cport"; fi
+    if [[ -n "$hip" && "$hip" != "0.0.0.0" && "$hip" != "::" ]]; then printf '%s:%s:%s\n' "$hip" "$hport" "$cport"; else printf '%s:%s\n' "$hport" "$cport"; fi
   done
 }
 default_cli_port_spec(){ local bind="${1:-public}"; if [[ "$bind" == "local" ]]; then printf '127.0.0.1:8317:8317\n'; else printf '8317:8317\n'; fi; }
