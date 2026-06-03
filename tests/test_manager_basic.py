@@ -69,7 +69,7 @@ printf 'certbot %q ' "$@" >> {log}; printf '\n' >> {log}
     write_exe(mockbin / "getent", "#!/usr/bin/env bash\nif [[ $1 == hosts ]]; then echo '203.0.113.10 example.com'; exit 0; fi\nexit 1\n")
 
     if docker_mode != "absent":
-        port_line = "8317/tcp -> 0.0.0.0:8317" if cli_bind == "public" else "8317/tcp -> 127.0.0.1:8317"
+        port_line = "8317/tcp -> 0.0.0.0:8317" if cli_bind == "public" else "8317/tcp -> 127.0.0.1:18317"
         docker_script = f'''#!/usr/bin/env bash
 set -e
 printf 'docker ' >> {log}; printf '%q ' "$@" >> {log}; printf '\n' >> {log}
@@ -101,7 +101,7 @@ case "$cmd" in
     ;;
   port)
     if [[ "${{1:-}}" == "cli-proxy-api" ]]; then echo "{port_line}"; fi
-    if [[ "${{1:-}}" == "cpa-usage-keeper" ]]; then echo "8080/tcp -> 127.0.0.1:8080"; fi
+    if [[ "${{1:-}}" == "cpa-usage-keeper" ]]; then echo "8080/tcp -> 127.0.0.1:18080"; fi
     ;;
   inspect)
     c="${{1:-}}"; fmt=""
@@ -228,6 +228,20 @@ class ManagerBasicTests(unittest.TestCase):
         self.assertNotIn("key-secret", calls)
         self.assertIn("-p 127.0.0.1:8080:8080", calls)
 
+    def test_public_access_uses_existing_keeper_host_port_and_prints_urls(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            root = base / "rootfs"
+            mockbin, log = make_mockbin(base, docker_mode="ok", cli_exists=True, cli_running=True, keeper_exists=True, keeper_running=True, cli_bind="local", certbot_success=False)
+            result = run_manager("4\n1\n3\nexample.com\nY\n\n4\n4\n5\n", mockbin, test_root=root)
+            conf = root / "etc/nginx/conf.d/cpa-cli-proxy.conf"
+            conf_text = conf.read_text()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("proxy_pass http://127.0.0.1:18317", conf_text)
+        self.assertIn("proxy_pass http://127.0.0.1:18080/cpa/", conf_text)
+        self.assertIn("反代后的网址：http://example.com/management.html 和 http://example.com/cpa/", result.stdout)
+        self.assertIn("cpa-usage-keeper 本机反代目标：http://127.0.0.1:18080/cpa/", result.stdout)
+
     def test_uninstall_default_n_does_not_stop_or_rm(self):
         with tempfile.TemporaryDirectory() as d:
             base = Path(d)
@@ -252,7 +266,7 @@ class ManagerBasicTests(unittest.TestCase):
         self.assertIn("certbot 申请证书失败，已保留 HTTP 反代配置", result.stdout)
         self.assertIn("server_name example.com", conf_text)
         self.assertIn("proxy_pass http://127.0.0.1:8317", conf_text)
-        self.assertIn("proxy_pass http://127.0.0.1:8080/cpa/", conf_text)
+        self.assertIn("proxy_pass http://127.0.0.1:18080/cpa/", conf_text)
         self.assertIn("certbot --nginx", calls)
         self.assertIn("-d", calls)
         self.assertIn("example.com", calls)
