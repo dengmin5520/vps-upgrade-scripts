@@ -31,6 +31,7 @@ This repository currently provides:
 
 - Install Docker using Docker's official convenience script: `https://get.docker.com`.
 - Install `cli-proxy-api` with config file, auth directory, logs directory, Docker network, and management key.
+  - **Important:** The generated `config.yaml` always includes `port: 8317`. Without this line, CLIProxyAPI listens on a random port and the Docker port mapping (`8317:8317`) becomes useless — external access will fail with "connection reset".
 - Install `cpa-usage-keeper` on the same Docker network.
 - Keeper binds to `127.0.0.1:8080` by default instead of exposing itself directly to the public Internet.
 
