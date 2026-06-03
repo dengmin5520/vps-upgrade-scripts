@@ -116,14 +116,17 @@ while i < len(lines):
             rm_done=True
         i += 1
         # Skip the whole original remote-management block.  The upstream sample
-        # may contain indented comments separated by blank lines; stopping on a
-        # blank line leaves duplicate allow-remote / secret-key entries and makes
-        # CLIProxyAPI fail YAML parsing.
+        # may contain comments (lines starting with #) between indented children;
+        # stopping only on indented lines leaves duplicate allow-remote / secret-key
+        # entries and makes CLIProxyAPI fail YAML parsing.  Skip comments and blank
+        # lines inside the block too.
         while i < len(lines):
             nxt=lines[i]
-            if top_level(nxt):
-                break
-            i += 1
+            if nxt.startswith("#") or nxt.startswith(" ") or nxt.startswith("\t") or nxt.strip()=="":
+                i += 1
+                continue
+            # It's a real top-level key — stop skipping
+            break
         continue
     if re.match(r"^usage-statistics-enabled\s*:", line):
         if not usage_done:
@@ -224,8 +227,8 @@ keeper_env_file(){
   {
     printf 'CPA_BASE_URL=http://cli-proxy-api:8317\n'
     printf 'CPA_MANAGEMENT_KEY=%s\n' "$cpakey"
-    printf 'LOGIN_PASSWORD=%s\n' "$login"
-    printf 'AUTH_ENABLED=true\nAPP_BASE_PATH=/cpa\nAPP_PORT=8080\nREDIS_QUEUE_ADDR=cli-proxy-api:8317\n'
+    printf 'LOGIN_PASSWORD=*** "$login"
+    printf 'AUTH_ENABLED=true\n...7\n'
     [[ -n "$public_url" ]] && printf 'CPA_PUBLIC_URL=%s\n' "$public_url"
   } > "$f"
   printf '%s' "$f"
