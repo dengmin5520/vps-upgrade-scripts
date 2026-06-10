@@ -98,6 +98,7 @@ certbot --nginx \
 
 - Does not require an email address.
 - Does not force HTTP → HTTPS redirects.
+- After successful certificate issuance, the manager explicitly rewrites the Nginx file with a persistent `listen 443 ssl http2` server block instead of relying on certbot to patch the file implicitly.
 - If certificate issuance fails, the HTTP Nginx configuration is kept.
 
 ---
@@ -278,6 +279,7 @@ certbot --nginx \
 
 - 不要求用户输入邮箱。
 - 不强制 HTTP 跳转 HTTPS。
+- 证书申请成功后，脚本会显式重写 Nginx 配置并持久写入 `listen 443 ssl http2` server block，不再隐式依赖 certbot 修改配置文件。
 - 如果证书申请失败，保留 HTTP Nginx 配置。
 
 ---

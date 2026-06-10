@@ -251,14 +251,37 @@ run_line="$(grep '^run ' "$TMP_ROOT/state/actions" | tail -1)"
 grep -q '^ufw delete allow 8317/tcp$' "$TMP_ROOT/state/actions" || fail 'forbid did not close firewall'
 pass 'forbid_ip_port localizes port'
 
-# Test nginx conf writer for combined mode.
+# Test nginx conf writer for combined HTTP mode.
 reset_runtime
 write_nginx_conf 'proxy.example.test' both '127.0.0.1:8317' '127.0.0.1:8080'
 conf="$TMP_ROOT/etc/nginx/conf.d/cpa-cli-proxy.conf"
 grep -q 'server_name proxy.example.test;' "$conf" || fail 'nginx conf missing server_name'
 grep -q 'proxy_pass http://127.0.0.1:8317;' "$conf" || fail 'nginx conf missing cli upstream'
 grep -q 'proxy_pass http://127.0.0.1:8080/cpa/;' "$conf" || fail 'nginx conf missing keeper upstream'
-pass 'write_nginx_conf both mode'
+! grep -q 'listen 443 ssl' "$conf" || fail 'HTTP-only nginx conf unexpectedly contains 443'
+pass 'write_nginx_conf both HTTP mode'
+
+# Test nginx conf writer keeps explicit HTTPS server block when requested.
+reset_runtime
+write_nginx_conf 'proxy.example.test' both '127.0.0.1:8317' '127.0.0.1:8080' https
+conf="$TMP_ROOT/etc/nginx/conf.d/cpa-cli-proxy.conf"
+grep -q 'listen 443 ssl http2;' "$conf" || fail 'HTTPS nginx conf missing listen 443'
+grep -q 'ssl_certificate /etc/letsencrypt/live/proxy.example.test/fullchain.pem;' "$conf" || fail 'HTTPS nginx conf missing certificate path'
+grep -q 'ssl_certificate_key /etc/letsencrypt/live/proxy.example.test/privkey.pem;' "$conf" || fail 'HTTPS nginx conf missing private key path'
+grep -q 'proxy_pass http://127.0.0.1:8317;' "$conf" || fail 'HTTPS nginx conf missing cli upstream'
+grep -q 'proxy_pass http://127.0.0.1:8080/cpa/;' "$conf" || fail 'HTTPS nginx conf missing keeper upstream'
+pass 'write_nginx_conf both HTTPS mode'
+
+# Test successful public access writes explicit HTTPS 443 config after certbot.
+reset_runtime; touch "$TMP_ROOT/state/cli_proxy_api_exists" "$TMP_ROOT/state/cli_proxy_api_running" "$TMP_ROOT/state/cpa_usage_keeper_exists" "$TMP_ROOT/state/cpa_usage_keeper_running"
+configure_public_access both <<< $'proxy.example.test\nY\n\n' >/tmp/public-success.out
+conf="$TMP_ROOT/etc/nginx/conf.d/cpa-cli-proxy.conf"
+grep -q 'listen 443 ssl http2;' "$conf" || fail 'public access success did not persist listen 443'
+grep -q 'ssl_certificate /etc/letsencrypt/live/proxy.example.test/fullchain.pem;' "$conf" || fail 'public access success missing certificate path'
+grep -q 'proxy_pass http://127.0.0.1:8317;' "$conf" || fail 'public access success missing cli upstream'
+grep -q 'proxy_pass http://127.0.0.1:8080/cpa/;' "$conf" || fail 'public access success missing keeper upstream'
+grep -q 'HTTPS 证书申请成功，已写入 443 反代配置' /tmp/public-success.out || fail 'public access success did not report HTTPS config write'
+pass 'public access success writes persistent HTTPS config'
 
 # Test configure_public_access invalid domain stops before nginx/certbot.
 reset_runtime; touch "$TMP_ROOT/state/cli_proxy_api_exists" "$TMP_ROOT/state/cli_proxy_api_running"

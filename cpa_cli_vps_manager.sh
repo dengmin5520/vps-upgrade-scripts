@@ -464,14 +464,8 @@ install_pkg(){
   local pkgs=("$@"); if has_cmd apt-get; then apt-get update; apt-get install -y "${pkgs[@]}"; elif has_cmd dnf; then dnf install -y "${pkgs[@]}"; elif has_cmd yum; then yum install -y "${pkgs[@]}"; else log "未检测到支持的包管理器，请手动安装：${pkgs[*]}"; return 1; fi
 }
 valid_domain(){ [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]]; }
-write_nginx_conf(){
-  local domain="$1" mode="${2:-both}" cli_endpoint="${3:-127.0.0.1:8317}" keeper_endpoint="${4:-127.0.0.1:8080}" conf; conf="$(root_path "$NGINX_CONF")"; mkdir -p "$(dirname "$conf")"; [[ -f "$conf" ]] && cp "$conf" "$conf.bak-$(date +%Y%m%d%H%M%S)"
-  cat > "$conf" <<EOF
-server {
-    listen 80;
-    server_name $domain;
-    client_max_body_size 50m;
-EOF
+append_nginx_locations(){
+  local conf="$1" mode="$2" cli_endpoint="$3" keeper_endpoint="$4"
   if [[ "$mode" == "cli" || "$mode" == "both" ]]; then
     cat >> "$conf" <<EOF
     location / {
@@ -510,9 +504,40 @@ EOF
     }
 EOF
   fi
+}
+write_nginx_conf(){
+  local domain="$1" mode="${2:-both}" cli_endpoint="${3:-127.0.0.1:8317}" keeper_endpoint="${4:-127.0.0.1:8080}" tls="${5:-http}" conf
+  conf="$(root_path "$NGINX_CONF")"; mkdir -p "$(dirname "$conf")"; [[ -f "$conf" ]] && cp "$conf" "$conf.bak-$(date +%Y%m%d%H%M%S)"
+  cat > "$conf" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $domain;
+    client_max_body_size 50m;
+EOF
+  append_nginx_locations "$conf" "$mode" "$cli_endpoint" "$keeper_endpoint"
   cat >> "$conf" <<'EOF'
 }
 EOF
+  if [[ "$tls" == "https" ]]; then
+    cat >> "$conf" <<EOF
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name $domain;
+    client_max_body_size 50m;
+
+    ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+EOF
+    append_nginx_locations "$conf" "$mode" "$cli_endpoint" "$keeper_endpoint"
+    cat >> "$conf" <<'EOF'
+}
+EOF
+  fi
 }
 public_access_label(){
   case "$1" in
@@ -574,10 +599,18 @@ EOF
   systemctl reload nginx || true; open_firewall_port 80; open_firewall_port 443
   has_cmd certbot || install_pkg certbot python3-certbot-nginx || true
   if has_cmd certbot && certbot --nginx -d "$domain" --non-interactive --agree-tos --register-unsafely-without-email --no-redirect; then
-    if nginx -t; then systemctl reload nginx || true; fi
-    https_ok=1
-    log "HTTPS 证书申请成功。"
-    public_access_urls https "$domain" "$mode"
+    write_nginx_conf "$domain" "$mode" "$cli_endpoint" "$keeper_endpoint" https
+    if nginx -t; then
+      systemctl reload nginx || true
+      https_ok=1
+      log "HTTPS 证书申请成功，已写入 443 反代配置。"
+      public_access_urls https "$domain" "$mode"
+    else
+      write_nginx_conf "$domain" "$mode" "$cli_endpoint" "$keeper_endpoint"
+      nginx -t && systemctl reload nginx || true
+      log "certbot 已成功，但 443 Nginx 配置测试失败，已回退保留 HTTP 反代配置。"
+      public_access_urls http "$domain" "$mode"
+    fi
   else
     log "certbot 申请证书失败，已保留 HTTP 反代配置。"
     public_access_urls http "$domain" "$mode"
@@ -592,7 +625,11 @@ EOF
           if [[ -n "$login" && -n "$cpakey" ]]; then
             if recreate_keeper "$login" "$cpakey" "https://$domain"; then
               keeper_endpoint="$(container_host_endpoint "$KEEPER_CONTAINER" 8080 "$keeper_endpoint")"
-              write_nginx_conf "$domain" "$mode" "$cli_endpoint" "$keeper_endpoint"
+              if [[ "$https_ok" == 1 ]]; then
+                write_nginx_conf "$domain" "$mode" "$cli_endpoint" "$keeper_endpoint" https
+              else
+                write_nginx_conf "$domain" "$mode" "$cli_endpoint" "$keeper_endpoint"
+              fi
               if nginx -t; then systemctl reload nginx || true; log "cpa-usage-keeper 重建后已重新写入并 reload 反代配置，当前反代目标：http://$keeper_endpoint/cpa/"; else log "cpa-usage-keeper 重建后 Nginx 配置测试失败，请检查 $NGINX_CONF。"; fi
               log "已更新 CPA_PUBLIC_URL。请登录 cpa-usage-keeper 测试“返回 CPA”按钮是否能跳回 https://$domain。"
               public_access_urls https "$domain" "$mode"

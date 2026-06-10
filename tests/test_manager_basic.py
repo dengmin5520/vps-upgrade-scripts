@@ -239,8 +239,26 @@ class ManagerBasicTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("proxy_pass http://127.0.0.1:18317", conf_text)
         self.assertIn("proxy_pass http://127.0.0.1:18080/cpa/", conf_text)
+        self.assertNotIn("listen 443 ssl", conf_text)
         self.assertIn("反代后的网址：http://example.com/management.html 和 http://example.com/cpa/", result.stdout)
         self.assertIn("cpa-usage-keeper 本机反代目标：http://127.0.0.1:18080/cpa/", result.stdout)
+
+    def test_public_access_success_persists_explicit_https_server(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            root = base / "rootfs"
+            mockbin, log = make_mockbin(base, docker_mode="ok", cli_exists=True, cli_running=True, keeper_exists=True, keeper_running=True, cli_bind="local", certbot_success=True)
+            result = run_manager("4\n1\n3\nexample.com\nY\n\n4\n4\n5\n", mockbin, test_root=root)
+            conf = root / "etc/nginx/conf.d/cpa-cli-proxy.conf"
+            conf_text = conf.read_text()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("listen 443 ssl http2;", conf_text)
+        self.assertIn("ssl_certificate /etc/letsencrypt/live/example.com/fullchain.pem;", conf_text)
+        self.assertIn("ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;", conf_text)
+        self.assertIn("proxy_pass http://127.0.0.1:18317", conf_text)
+        self.assertIn("proxy_pass http://127.0.0.1:18080/cpa/", conf_text)
+        self.assertIn("HTTPS 证书申请成功，已写入 443 反代配置", result.stdout)
+        self.assertIn("反代后的网址：https://example.com/management.html 和 https://example.com/cpa/", result.stdout)
 
     def test_uninstall_default_n_does_not_stop_or_rm(self):
         with tempfile.TemporaryDirectory() as d:
